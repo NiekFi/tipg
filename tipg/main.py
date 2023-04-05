@@ -9,7 +9,12 @@ from tipg.db import close_db_connection, connect_to_db, register_collection_cata
 from tipg.errors import DEFAULT_STATUS_CODES, add_exception_handlers
 from tipg.factory import Endpoints
 from tipg.middleware import CacheControlMiddleware
-from tipg.settings import APISettings, DatabaseSettings, PostgresSettings
+from tipg.settings import (
+    APISettings,
+    CustomSQLSettings,
+    DatabaseSettings,
+    PostgresSettings,
+)
 
 from fastapi import FastAPI, Request
 
@@ -20,6 +25,7 @@ from starlette_cramjam.middleware import CompressionMiddleware
 settings = APISettings()
 postgres_settings = PostgresSettings()
 db_settings = DatabaseSettings()
+custom_sql_settings = CustomSQLSettings()
 
 
 app = FastAPI(
@@ -43,9 +49,8 @@ templates = Jinja2Templates(
     loader=jinja2.ChoiceLoader(templates_location),
 )  # type: ignore
 
-# Register endpoints.
-endpoints = Endpoints(title=settings.name, templates=templates)
-app.include_router(endpoints.router, tags=["OGC API"])
+ogc_api = Endpoints(title=settings.name, templates=templates)
+app.include_router(ogc_api.router)
 
 # Set all CORS enabled origins
 if settings.cors_origins:
@@ -65,17 +70,21 @@ add_exception_handlers(app, DEFAULT_STATUS_CODES)
 @app.on_event("startup")
 async def startup_event() -> None:
     """Connect to database on startup."""
-    await connect_to_db(app, settings=postgres_settings)
+    await connect_to_db(
+        app,
+        settings=postgres_settings,
+        schemas=db_settings.schemas,
+        user_sql_files=custom_sql_settings.sql_files,
+    )
     await register_collection_catalog(
         app,
         schemas=db_settings.schemas,
-        exclude_schemas=db_settings.exclude_schemas,
         tables=db_settings.tables,
         exclude_tables=db_settings.exclude_tables,
-        function_schemas=db_settings.function_schemas,
-        exclude_function_schemas=db_settings.exclude_function_schemas,
+        exclude_table_schemas=db_settings.exclude_table_schemas,
         functions=db_settings.functions,
         exclude_functions=db_settings.exclude_functions,
+        exclude_function_schemas=db_settings.exclude_function_schemas,
         spatial=db_settings.only_spatial_tables,
     )
 
@@ -98,14 +107,14 @@ def ping():
     return {"ping": "pong!"}
 
 
-if settings.DEBUG:
+if settings.debug:
 
-    @app.get("/rawcatalog")
+    @app.get("/rawcatalog", tags=["debug"])
     async def raw_catalog(request: Request):
         """Return parsed catalog data for testing."""
         return request.app.state.collection_catalog
 
-    @app.get("/refresh")
+    @app.get("/refresh", tags=["debug"])
     async def refresh(request: Request):
         """Return parsed catalog data for testing."""
         await startup_event()

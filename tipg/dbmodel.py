@@ -22,10 +22,11 @@ from tipg.errors import (
 )
 from tipg.filter.evaluate import to_filter
 from tipg.filter.filters import bbox_to_wkt
+from tipg.logger import logger
 from tipg.model import Extent
-from tipg.settings import TableSettings, TileSettings
+from tipg.settings import MVTSettings, TableSettings
 
-tile_settings = TileSettings()
+mvt_settings = MVTSettings()
 
 
 def debug_query(q, *p):
@@ -44,8 +45,7 @@ def debug_query(q, *p):
             return s
 
     p = [quote_str(s) for s in p]
-    print("DEBUG QUERY")
-    print(qsub.format(None, *p))
+    logger.debug(qsub.format(None, *p))
 
 
 # Links to geojson schema
@@ -163,14 +163,11 @@ class Collection(BaseModel):
     geometry_column: Optional[Column]
     datetime_column: Optional[Column]
     parameters: List[Parameter] = []
-    minzoom: int = tile_settings.default_minzoom
-    maxzoom: int = tile_settings.default_maxzoom
-    default_tms: str = tile_settings.default_tms
 
     @property
     def extent(self) -> Optional[Extent]:
         """Return extent."""
-        extent = {}
+        extent: Dict[str, Any] = {}
         if cols := self.geometry_columns:
             if len(cols) == 1:
                 bbox = [cols[0].bounds]
@@ -183,12 +180,12 @@ class Collection(BaseModel):
 
             extent["spatial"] = {
                 "bbox": bbox,
-                "crs": f"http://www.opengis.net/def/crs/EPSG/0/{cols[0].srid}",
+                # The extent calculated in Pg is in WGS84 LON,LAT order
+                # so we use `CRS84` as CRS
+                "crs": "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
             }
 
-        if cols := self.datetime_columns:
-            cols = [col for col in cols if col.mindt or col.maxdt]
-
+        if cols := [col for col in self.datetime_columns if col.mindt or col.maxdt]:
             intervals = []
             if len(cols) == 1:
                 if cols[0].mindt or cols[0].maxdt:
@@ -356,7 +353,7 @@ class Collection(BaseModel):
         tile: Tile,
     ):
         """Create MVT from intersecting geometries."""
-        geom = logic.V(geometry_column.name)
+        geom = pg_funcs.cast(logic.V(geometry_column.name), "geometry")
 
         # make sure the geometries do not overflow the TMS bbox
         if not tms.is_valid(tile):
@@ -403,9 +400,9 @@ class Collection(BaseModel):
                     ),
                     bbox.right - bbox.left,
                 ),
-                tile_settings.tile_resolution,
-                tile_settings.tile_buffer,
-                tile_settings.tile_clip,
+                mvt_settings.tile_resolution,
+                mvt_settings.tile_buffer,
+                mvt_settings.tile_clip,
             ).as_("geom")
         )
 
@@ -459,7 +456,7 @@ class Collection(BaseModel):
 
         return g
 
-    def _where(
+    def _where(  # noqa: C901
         self,
         ids: Optional[List[str]] = None,
         datetime: Optional[List[str]] = None,
@@ -580,9 +577,9 @@ class Collection(BaseModel):
 
         else:
             start = (
-                parse_rfc3339(interval[0]) if not interval[0] in ["..", ""] else None
+                parse_rfc3339(interval[0]) if interval[0] not in ["..", ""] else None
             )
-            end = parse_rfc3339(interval[1]) if not interval[1] in ["..", ""] else None
+            end = parse_rfc3339(interval[1]) if interval[1] not in ["..", ""] else None
 
             if start is None and end is None:
                 raise InvalidDatetime(
@@ -734,15 +731,17 @@ class Collection(BaseModel):
         bbox_only: Optional[bool] = None,
         simplify: Optional[float] = None,
         geom_as_wkt: bool = False,
-        function_parameters: Dict[str, str] = {},
+        function_parameters: Optional[Dict[str, str]] = None,
     ) -> Tuple[FeatureCollection, int]:
         """Build and run Pg query."""
+        function_parameters = function_parameters or {}
+
         if geom and geom.lower() != "none" and not self.get_geometry_column(geom):
             raise InvalidGeometryColumnName(f"Invalid Geometry Column: {geom}.")
 
-        if limit and limit > tile_settings.max_features_per_tile:
+        if limit and limit > mvt_settings.max_features_per_tile:
             raise InvalidLimit(
-                f"Limit can not be set higher than the tipg_max_features_per_tile setting of {tile_settings.max_features_per_tile}"
+                f"Limit can not be set higher than the tipg_max_features_per_tile setting of {mvt_settings.max_features_per_tile}"
             )
 
         count = await self._features_count_query(
@@ -803,13 +802,15 @@ class Collection(BaseModel):
         limit: Optional[int] = None,
     ):
         """Build query to get Vector Tile."""
+        limit = limit or mvt_settings.max_features_per_tile
+
         geometry_column = self.get_geometry_column(geom)
         if not geometry_column:
             raise InvalidGeometryColumnName(f"Invalid Geometry Column Name {geom}")
 
-        if limit and limit > tile_settings.max_features_per_tile:
+        if limit > mvt_settings.max_features_per_tile:
             raise InvalidLimit(
-                f"Limit can not be set higher than the tipg_max_features_per_tile setting of {tile_settings.max_features_per_tile}"
+                f"Limit can not be set higher than the tipg_max_features_per_tile setting of {mvt_settings.max_features_per_tile}"
             )
 
         c = clauses.Clauses(
@@ -831,7 +832,7 @@ class Collection(BaseModel):
                 tms=tms,
                 tile=tile,
             ),
-            clauses.Limit(limit or 10),
+            clauses.Limit(limit),
         )
 
         q, p = render(
@@ -841,7 +842,7 @@ class Collection(BaseModel):
             SELECT ST_AsMVT(t.*, :l) FROM t
             """,
             c=c,
-            l=self.table if tile_settings.set_mvt_layername is True else "default",
+            l=self.table if mvt_settings.set_mvt_layername is True else "default",
         )
         debug_query(q, *p)
 
@@ -873,28 +874,27 @@ Database = Dict[str, Collection]
 
 async def get_collection_index(  # noqa: C901
     db_pool: asyncpg.BuildPgPool,
-    schemas: Optional[List[str]] = ["public"],
-    exclude_schemas: Optional[List[str]] = None,
+    schemas: Optional[List[str]] = None,
     tables: Optional[List[str]] = None,
     exclude_tables: Optional[List[str]] = None,
-    function_schemas: Optional[List[str]] = ["public"],
-    exclude_function_schemas: Optional[List[str]] = None,
+    exclude_table_schemas: Optional[List[str]] = None,
     functions: Optional[List[str]] = None,
     exclude_functions: Optional[List[str]] = None,
+    exclude_function_schemas: Optional[List[str]] = None,
     spatial: bool = True,
 ) -> Database:
     """Fetch Table and Functions index."""
+    schemas = schemas or ["public"]
 
     query = """
         SELECT pg_temp.tipg_catalog(
             :schemas,
-            :exclude_schemas,
             :tables,
             :exclude_tables,
-            :function_schemas,
-            :exclude_function_schemas,
+            :exclude_table_schemas,
             :functions,
             :exclude_functions,
+            :exclude_function_schemas,
             :spatial
         );
     """  # noqa: W605
@@ -903,13 +903,12 @@ async def get_collection_index(  # noqa: C901
         rows = await conn.fetch_b(
             query,
             schemas=schemas,
-            exclude_schemas=exclude_schemas,
             tables=tables,
             exclude_tables=exclude_tables,
-            function_schemas=function_schemas,
-            exclude_function_schemas=exclude_function_schemas,
+            exclude_table_schemas=exclude_table_schemas,
             functions=functions,
             exclude_functions=exclude_functions,
+            exclude_function_schemas=exclude_function_schemas,
             spatial=spatial,
         )
 

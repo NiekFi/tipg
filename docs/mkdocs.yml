@@ -19,7 +19,9 @@ extra:
 nav:
   - TiPg: "index.md"
   - User Guide:
-    - "Endpoints": endpoints.md
+    - "Endpoints documentation": endpoints.md
+    - "Endpoints Factories": advanced/factories.md
+    - "Configuration": advanced/configuration.md
   - API:
     - db: api/tipg/db.md
     - dbmodel: api/tipg/dbmodel.md
@@ -37,6 +39,7 @@ nav:
       - filters: api/tipg/filter/filters.md
   - Development - Contributing: "contributing.md"
   - Release Notes: "release-notes.md"
+  - Benchmarks: benchmark.html
 
 plugins:
   - search
