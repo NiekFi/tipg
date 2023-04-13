@@ -1,4 +1,4 @@
-CREATE SCHEMA tipg_functions;
+CREATE SCHEMA IF NOT EXISTS tipg_functions;
 CREATE OR REPLACE FUNCTION tipg_functions.typ(t text) RETURNS text AS $$
     SELECT replace(replace(replace(replace(t,'character varying','text'),'double precision','float8'),'timestamp with time zone','timestamptz'),'timestamp without time zone','timestamp');
 $$ LANGUAGE SQL IMMUTABLE STRICT;
