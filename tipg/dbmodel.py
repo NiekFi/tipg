@@ -886,16 +886,12 @@ async def get_collection_index(  # noqa: C901
     exclude_functions: Optional[List[str]] = None,
     exclude_function_schemas: Optional[List[str]] = None,
     spatial: bool = True,
-    temp_schema: str = "pg_temp",
 ) -> Database:
     """Fetch Table and Functions index."""
     schemas = schemas or ["public"]
-    if temp_schema:
-        # add the schema.table separator
-        temp_schema = f"{temp_schema}."
 
     query = f"""
-        SELECT {temp_schema}tipg_catalog(
+        SELECT pg_temp.tipg_catalog(
             :schemas,
             :tables,
             :exclude_tables,
