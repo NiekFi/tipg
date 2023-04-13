@@ -1,17 +1,18 @@
-CREATE OR REPLACE FUNCTION pg_temp.typ(t text) RETURNS text AS $$
+CREATE SCHEMA tipg_functions;
+CREATE OR REPLACE FUNCTION tipg_functions.typ(t text) RETURNS text AS $$
     SELECT replace(replace(replace(replace(t,'character varying','text'),'double precision','float8'),'timestamp with time zone','timestamptz'),'timestamp without time zone','timestamp');
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
-CREATE OR REPLACE FUNCTION pg_temp.nspname(n oid) RETURNS text AS $$
-    SELECT CASE WHEN n=pg_my_temp_schema() THEN 'pg_temp' ELSE nspname::text END
+CREATE OR REPLACE FUNCTION tipg_functions.nspname(n oid) RETURNS text AS $$
+    SELECT CASE WHEN n=pg_my_temp_schema() THEN 'tipg_functions' ELSE nspname::text END
     FROM pg_namespace WHERE oid=n;
 $$ LANGUAGE SQL STABLE;
 
-CREATE OR REPLACE FUNCTION pg_temp.nspname(n regnamespace) RETURNS text AS $$
-    SELECT pg_temp.nspname(n::oid);
+CREATE OR REPLACE FUNCTION tipg_functions.nspname(n regnamespace) RETURNS text AS $$
+    SELECT tipg_functions.nspname(n::oid);
 $$ LANGUAGE SQL STABLE;
 
-CREATE OR REPLACE FUNCTION pg_temp.tipg_pk(
+CREATE OR REPLACE FUNCTION tipg_functions.tipg_pk(
     table_oid oid
 ) RETURNS text AS $$
     SELECT attname::text
@@ -30,13 +31,13 @@ CREATE OR REPLACE FUNCTION pg_temp.tipg_pk(
     LIMIT 1;
 $$ LANGUAGE SQL;
 
-CREATE OR REPLACE FUNCTION pg_temp.tipg_properties(
+CREATE OR REPLACE FUNCTION tipg_functions.tipg_properties(
     att pg_attribute
 ) RETURNS jsonb AS $$
 DECLARE
     attname text := att.attname;
     attdescription text := col_description(att.attrelid, att.attnum);
-    atttype text := pg_temp.typ(format_type(att.atttypid, null));
+    atttype text := tipg_functions.typ(format_type(att.atttypid, null));
     attmin json;
     attmax json;
     srid int;
@@ -100,12 +101,12 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL;
 
-CREATE OR REPLACE FUNCTION pg_temp.tipg_tproperties(
+CREATE OR REPLACE FUNCTION tipg_functions.tipg_tproperties(
     c pg_class
 ) RETURNS jsonb AS $$
     WITH t AS (
         SELECT
-            jsonb_agg(pg_temp.tipg_properties(a)) as properties
+            jsonb_agg(tipg_functions.tipg_properties(a)) as properties
         FROM
             pg_attribute a
         WHERE
@@ -115,20 +116,20 @@ CREATE OR REPLACE FUNCTION pg_temp.tipg_tproperties(
             and has_column_privilege(c.oid, a.attnum, 'SELECT')
     ) SELECT jsonb_build_object(
         'entity', 'Table',
-        'pk', pg_temp.tipg_pk(c.oid),
+        'pk', tipg_functions.tipg_pk(c.oid),
         'name', c.relname::text,
-        'schema', pg_temp.nspname(c.relnamespace),
+        'schema', tipg_functions.nspname(c.relnamespace),
         'properties', properties
     ) FROM t;
 $$ LANGUAGE SQL;
 
-CREATE OR REPLACE FUNCTION pg_temp.tipg_tproperties(
+CREATE OR REPLACE FUNCTION tipg_functions.tipg_tproperties(
     tabl text
 ) RETURNS jsonb AS $$
-    SELECT pg_temp.tipg_tproperties(pg_class) FROM pg_class WHERE oid=tabl::regclass;
+    SELECT tipg_functions.tipg_tproperties(pg_class) FROM pg_class WHERE oid=tabl::regclass;
 $$ LANGUAGE SQL;
 
-CREATE OR REPLACE FUNCTION pg_temp.tipg_fun_defaults(defaults pg_node_tree) RETURNS text[] AS $$
+CREATE OR REPLACE FUNCTION tipg_functions.tipg_fun_defaults(defaults pg_node_tree) RETURNS text[] AS $$
     WITH d AS (
         SELECT btrim(split_part(btrim(string_to_table(
                 pg_get_expr(defaults,0::oid),
@@ -138,7 +139,7 @@ CREATE OR REPLACE FUNCTION pg_temp.tipg_fun_defaults(defaults pg_node_tree) RETU
     ;
 $$ LANGUAGE SQL;
 
-CREATE OR REPLACE FUNCTION pg_temp.tipg_fproperties(
+CREATE OR REPLACE FUNCTION tipg_functions.tipg_fproperties(
     p pg_proc
 ) RETURNS jsonb AS $$
 DECLARE
@@ -152,7 +153,7 @@ BEGIN
     IF p.pronargdefaults > 0 AND p.pronargs > 0 THEN
         defaults :=
             array_fill(null::text, ARRAY[p.pronargs-p.pronargdefaults])
-            || pg_temp.tipg_fun_defaults(p.proargdefaults)
+            || tipg_functions.tipg_fun_defaults(p.proargdefaults)
         ;
     ELSE
         defaults := array_fill(null::text, ARRAY[p.pronargs]);
@@ -168,7 +169,7 @@ BEGIN
 
     WITH t AS (
         SELECT
-            pg_temp.typ(format_type(argtype, null)) as argtype,
+            tipg_functions.typ(format_type(argtype, null)) as argtype,
             argmode,
             proargname,
             def,
@@ -190,20 +191,20 @@ BEGIN
     RETURN jsonb_build_object(
         'entity', 'Function',
         'name', p.proname,
-        'schema', pg_temp.nspname(p.pronamespace),
+        'schema', tipg_functions.nspname(p.pronamespace),
         'properties', properties,
         'parameters', parameters
     );
 END;
 $$ LANGUAGE PLPGSQL;
 
-CREATE OR REPLACE FUNCTION pg_temp.tipg_fproperties(
+CREATE OR REPLACE FUNCTION tipg_functions.tipg_fproperties(
     func text
 ) RETURNS jsonb AS $$
-    SELECT pg_temp.tipg_fproperties(pg_proc) FROM pg_proc WHERE oid=func::regproc;
+    SELECT tipg_functions.tipg_fproperties(pg_proc) FROM pg_proc WHERE oid=func::regproc;
 $$ LANGUAGE SQL;
 
-CREATE OR REPLACE FUNCTION pg_temp.tipg_get_schemas(include text[] DEFAULT NULL, exclude text[] DEFAULT NULL) RETURNS SETOF oid AS $$
+CREATE OR REPLACE FUNCTION tipg_functions.tipg_get_schemas(include text[] DEFAULT NULL, exclude text[] DEFAULT NULL) RETURNS SETOF oid AS $$
 DECLARE
 BEGIN
     IF include IS NULL OR cardinality(include) = 0 THEN
@@ -227,7 +228,7 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL;
 
-CREATE OR REPLACE FUNCTION pg_temp.tipg_catalog(
+CREATE OR REPLACE FUNCTION tipg_functions.tipg_catalog(
     schemas text[] DEFAULT NULL,
     tables text[] DEFAULT NULL,
     exclude_tables text[] DEFAULT NULL,
@@ -239,8 +240,8 @@ CREATE OR REPLACE FUNCTION pg_temp.tipg_catalog(
 ) RETURNS SETOF jsonb AS $$
     WITH a AS (
         SELECT
-            pg_temp.tipg_tproperties(c) as meta
-        FROM pg_class c, pg_temp.tipg_get_schemas(schemas,exclude_table_schemas) s
+            tipg_functions.tipg_tproperties(c) as meta
+        FROM pg_class c, tipg_functions.tipg_get_schemas(schemas,exclude_table_schemas) s
         WHERE
             c.relnamespace=s
             AND relkind IN ('r','v', 'm', 'f', 'p')
@@ -251,9 +252,9 @@ CREATE OR REPLACE FUNCTION pg_temp.tipg_catalog(
 
         UNION ALL
         SELECT
-            pg_temp.tipg_fproperties(p) as meta
+            tipg_functions.tipg_fproperties(p) as meta
         FROM
-            pg_proc p, pg_temp.tipg_get_schemas(schemas,exclude_function_schemas) s
+            pg_proc p, tipg_functions.tipg_get_schemas(schemas,exclude_function_schemas) s
         WHERE
             p.pronamespace=s
             AND proretset

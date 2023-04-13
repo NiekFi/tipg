@@ -891,7 +891,7 @@ async def get_collection_index(  # noqa: C901
     schemas = schemas or ["public"]
 
     query = f"""
-        SELECT pg_temp.tipg_catalog(
+        SELECT tipg_functions.tipg_catalog(
             :schemas,
             :tables,
             :exclude_tables,
@@ -926,7 +926,7 @@ async def get_collection_index(  # noqa: C901
             table_id = table["schema"] + "." + table["name"]
             confid = table["schema"] + "_" + table["name"]
 
-            if table_id == "pg_temp.tipg_catalog":
+            if table_id == "tipg_functions.tipg_catalog":
                 continue
 
             table_conf = table_confs.get(confid, {})

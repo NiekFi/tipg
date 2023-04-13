@@ -47,7 +47,7 @@ class connection_factory:
 
         # Note: we add `pg_temp as the first element of the schemas list to make sure
         # we register the custom functions and `dbcatalog` in it.
-        schemas = ",".join(["pg_temp", *self.schemas])
+        schemas = ",".join(["tipg_functions", "pg_temp", *self.schemas])
         logger.debug(f"Looking for Tables and Functions in {schemas} schemas")
 
         await conn.execute(
